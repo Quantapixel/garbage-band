@@ -8,5 +8,11 @@
     "dev": "node --watch server.js",
     "test": "node --test"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.39.0",
+    "@vercel/blob": "^2.8.0"
+  }
 }

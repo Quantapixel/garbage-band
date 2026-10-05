@@ -5,7 +5,7 @@ const referenceAudio = import('/reference-sounds.js');
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const qs = new URLSearchParams(location.search);
 let credentials = JSON.parse(sessionStorage.getItem('gb-session') || 'null');
-let state = null, events = null, mode = 'home', busy = false, recording = false, referenceStop = null, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, toastTimer = null;
+let state = null, pollTimer = null, polling = false, mode = 'home', busy = false, recording = false, referenceStop = null, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, toastTimer = null;
 const phases = ['lobby', 'recording', 'composing', 'listening', 'voting', 'reveal'];
 const phaseNames = ['01 / ROOM', '02 / RECORD', '03 / MAKE', '04 / LISTEN', '05 / VOTE', '06 / REVEAL'];
 
@@ -23,13 +23,20 @@ function saveCredentials(result) {
   connect(); applyState(result.state);
 }
 function connect() {
-  events?.close();
+  clearInterval(pollTimer);
   if (!credentials) return;
-  events = new EventSource(`/api/events?code=${encodeURIComponent(credentials.code)}&token=${encodeURIComponent(credentials.token)}`);
-  events.addEventListener('state', e => { try { applyState(JSON.parse(e.data)); } catch (err) { console.error(err); } });
+  pollTimer = setInterval(async () => {
+    if (polling) return;
+    polling = true;
+    try { applyState(await request(`/api/game?op=state&code=${encodeURIComponent(credentials.code)}&token=${encodeURIComponent(credentials.token)}`)); }
+    catch (error) { console.warn('Room update failed:', error); }
+    finally { polling = false; }
+  }, 2000);
 }
 function applyState(next) {
   const previous = state;
+  if (previous && next.version < previous.version) return;
+  if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
   state = next;
   if (previous?.round !== next.round || previous?.kit.length !== next.kit.length) { pattern = null; audioCache.clear(); rawAudioCache.clear(); }
   if (playback && (previous?.phase !== next.phase || (next.phase === 'listening' && previous?.listeningIndex !== next.listeningIndex) || (next.phase === 'reveal' && (previous?.reveal?.index !== next.reveal?.index || previous?.reveal?.visible !== next.reveal?.visible)))) stopPlayback();
@@ -42,7 +49,7 @@ function applyState(next) {
 async function action(type, extra = {}) {
   if (busy) return;
   busy = true;
-  try { const next = await request('/api/action', { ...credentials, type, ...extra }); applyState(next); }
+  try { const next = await request('/api/game?op=action', { ...credentials, type, ...extra }); applyState(next); }
   catch (err) { toast(err.message); }
   finally { busy = false; }
 }
@@ -224,7 +231,7 @@ async function recordSound(sound) {
         const optimized = optimizePcm(channels, decoded.sampleRate, { sound });
         const wav = new Blob([encodeWav(optimized.pcm, optimized.sampleRate)], { type: 'audio/wav' });
         const audio = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(wav); });
-        const next = await request('/api/record', { ...credentials, sound, mime: 'audio/wav', audio });
+        const next = await request('/api/game?op=record', { ...credentials, sound, mime: 'audio/wav', audio });
         applyState(next); toast(`One ${sound} hit kept. Preview it or re-record.`);
       } catch (err) { toast(err.message); render(); }
       finally { recording = false; }
@@ -259,13 +266,13 @@ document.addEventListener('click', async e => {
 document.addEventListener('submit', async e => {
   if (e.target.id !== 'entry-form') return;
   e.preventDefault(); const form = new FormData(e.target); const button = e.target.querySelector('button[type=submit]'); button.disabled = true;
-  try { saveCredentials(await request(mode === 'join' ? '/api/join' : '/api/rooms', { name: form.get('name'), ...(mode === 'join' ? { code: form.get('code') } : {}) })); }
+  try { saveCredentials(await request(mode === 'join' ? '/api/game?op=join' : '/api/game?op=create', { name: form.get('name'), ...(mode === 'join' ? { code: form.get('code') } : {}) })); }
   catch (err) { toast(err.message); button.disabled = false; }
 });
-window.addEventListener('beforeunload', () => { events?.close(); stopPlayback(); });
+window.addEventListener('beforeunload', () => { clearInterval(pollTimer); stopPlayback(); });
 (async () => {
   if (credentials) {
-    try { const next = await request(`/api/rooms/${encodeURIComponent(credentials.code)}?token=${encodeURIComponent(credentials.token)}`); connect(); applyState(next); return; }
+    try { const next = await request(`/api/game?op=state&code=${encodeURIComponent(credentials.code)}&token=${encodeURIComponent(credentials.token)}`); connect(); applyState(next); return; }
     catch { sessionStorage.removeItem('gb-session'); credentials = null; }
   }
   if (qs.get('room')) mode = 'join';
