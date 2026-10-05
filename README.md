@@ -2,7 +2,7 @@
 
 **Make noise. Make music.** Garbage Band is a multiplayer browser game where friends turn their own voice recordings into a shared sample kit, build beats, and vote for the best track.
 
-**[Play the live game](https://garbage-band.vercel.app)** · **[View the source](https://github.com/Quantapixel/garbage-band)**
+**[Play the live game](https://garbage-band.vercel.app)** · **[Demo video](https://www.youtube.com/watch?v=pDHbt9RmlVU)** . **[Building Process](https://www.youtube.com/watch?v=pDHbt9RmlVU)**
 
 ![Garbage Band landing page](docs/garbage-band-home.png)
 
