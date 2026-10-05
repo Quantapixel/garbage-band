@@ -1,39 +1,69 @@
 # Garbage Band
 
-A browser party game for 3–8 players. The host creates a room, guests join with a six-character code, and each round moves through recording, beat making, anonymous listening, voting, and a countdown reveal.
+**Make noise. Make music.** Garbage Band is a multiplayer browser game where friends turn their own voice recordings into a shared sample kit, build beats, and vote for the best track.
+
+**[Play the live game](https://garbage-band.vercel.app)** · **[View the source](https://github.com/Quantapixel/garbage-band)**
+
+![Garbage Band landing page](docs/garbage-band-home.png)
+
+## Play a round
+
+You need **3–8 players**, each with a browser and microphone. The host creates a room and shares its six-character code or invite link. Headphones help keep playback out of recordings.
+
+1. **Draw a genre.** The host starts the round and everyone receives two surprise sound prompts suited to the genre.
+2. **Record your sounds.** Each prompt has a playable example and a mouth cue. Make one clear sound with your voice, then preview or replace your take. The browser trims lead-in air and extra attempts, balances the level, and uploads one short sample.
+3. **Build a beat.** The recordings become one shared kit. Everyone makes a track using only that kit and a 16-step sequencer.
+4. **Listen anonymously.** Tracks play one at a time, without their makers' names. The room moves on after everyone has listened.
+5. **Vote.** Pick your favorite track. You cannot vote for your own.
+6. **Watch the reveal.** Third, second, and first place appear in order, each with its maker and track. The host can start another round.
+
+To try the flow by yourself, open the live site in **three separate tabs** and join the same room with three different names. Each tab keeps its own session.
+
+## How it works
+
+| Part | Implementation |
+| --- | --- |
+| Browser app | Vanilla JavaScript and CSS; Web Audio schedules sequencer playback and synthesizes prompt examples. |
+| Recording | Browser microphone capture, single-hit detection, trimming, filtering, normalization, and WAV encoding before upload. |
+| Game API | Node.js functions validate room actions, assignments, tracks, and votes. |
+| Shared state | Upstash Redis stores rooms with atomic updates and a 24-hour expiry after the last change. Clients poll about every two seconds. |
+| Audio storage | Private Vercel Blob files are served through an authenticated game API route. A daily cron removes recordings from expired rooms. |
+| Reveal | Ranking stages are calculated from a saved start timestamp, so function restarts do not reset the countdown. |
+
+The deployed app runs on Vercel. The local server uses the same game API with in-memory stores when cloud credentials are absent.
 
 ## Run locally
 
-Requires Node.js 20 or newer.
+Use **Node.js 22** and npm:
 
 ```bash
-npm install
+npm ci
 npm start
 ```
 
-Open `http://localhost:3000`. Set `PORT` to change the port. With no cloud credentials, the local server keeps rooms and recordings in memory, so a restart clears them. Run `npm test` for the automated checks. Other devices need an HTTPS URL for microphone access; `localhost` works on the same device.
+Open **http://localhost:3000**. Run `npm test` for the automated checks. Set `PORT` to use another port.
 
-## Deploy to Vercel
+Local rooms and recordings are stored in memory and disappear when the server restarts. Microphone access works on `localhost` or an HTTPS site; another device cannot use a plain HTTP address on your computer.
 
-The Vercel version uses Upstash Redis for room state and private Vercel Blob storage for recordings. Functions poll room state every two seconds. Reveal stages use a stored start time, so they continue across function restarts. Both storage integrations must be connected before a deployed room can be created.
+## Deploy your own Vercel instance
 
-1. Import this Git repository into a new Vercel project. Use the **Other** framework preset, leave the root directory at the repository root, and use the default install command. `vercel.json` serves `public/` and deploys `api/` as functions.
-2. In the Vercel project, open **Storage → Create Database → Upstash Redis**. Connect the database to the project for **Production** and **Preview**. It must provide `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
-3. Create a **Vercel Blob** store and connect it to the same project for **Production** and **Preview**. It must provide `BLOB_READ_WRITE_TOKEN` (or the Blob OIDC variables).
-4. Add a long random `CRON_SECRET` environment variable for Production. Vercel sends it to the daily `/api/cleanup` cron endpoint, which removes recordings from expired rooms. Redeploy after changing integrations or environment variables.
-5. Deploy the main branch. Share the production HTTPS URL with your friends. Test one room with three separate browser sessions: each records two sounds, submits a track, listens, votes, and sees third, second, then first place.
+1. Import this repository into Vercel with the **Other** framework preset and the repository root as the root directory. `vercel.json` serves `public/` and builds `api/` as functions.
+2. Create an **Upstash for Redis** resource in Vercel Marketplace and connect it to the project. The app accepts either `KV_REST_API_URL` and `KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+3. Create a **private Vercel Blob** store and connect it to the project. It supplies `BLOB_READ_WRITE_TOKEN`.
+4. Add a long random `CRON_SECRET` environment variable for Production. Vercel uses it to authorize the daily `/api/cleanup` job.
+5. Deploy `main`, then open the HTTPS URL and test a round in three browser tabs. Redeploy after changing integrations or environment variables.
 
-The site returns a server error for room creation if either storage integration is missing; check the function logs and environment variables. If you run the app locally with cloud variables, it uses the cloud stores. Do not commit secrets to Git.
+Connect Redis and Blob to every Vercel environment you intend to use. Do not commit tokens or `.env` files. Vercel Functions have a 4.5 MB request limit, so the app sends short optimized WAV recordings and rejects a sample larger than 2.6 MB.
 
-Vercel Functions limit request bodies to 4.5 MB. The browser optimizes each recording and sends a short WAV; the API rejects recordings over 2.6 MB. Rooms expire 24 hours after their last update. A room tab can restore its session after a reload in the same tab.
+## Project layout
 
-## How a round works
+```text
+public/             Browser UI, sequencer, audio processing, and prompt examples
+api/                Vercel game and cleanup functions
+lib/game.js         Rules, room views, voting, and reveal timing
+lib/storage.js      Redis and Blob adapters, plus local memory stores
+server.js           Local development server
+test/               Audio, game flow, reference sound, and storage tests
+```
 
-1. The host creates a room and shares its code or invite link. At least three players must join.
-2. A random genre assigns two surprise sounds to each player. Each prompt has a synthesized example and a mouth cue. After a short countdown, each player records a 2.5-second vocal take and can preview or replace it. The browser isolates the strongest single sound, cuts breath before it and a second attempt after it, removes low microphone rumble, balances volume, and adds short edge fades before uploading the sample.
-3. Once every sample is in, the host opens the shared kit. Each player makes one 16-step pattern and submits it.
-4. Tracks play in a random anonymous order. Each player listens to four loops of each track; the room advances after everyone has listened.
-5. Everyone votes once for another player's track. The server rejects self-votes.
-6. The top three appear in order: third, second, first. Each reveal shows the maker and plays their track. The host can start another round.
-
-Sequencer playback uses Web Audio scheduling, so each sample starts on its assigned step. Samples are prefetched when the shared kit opens to reduce the wait before first playback.
+The deployed game was checked with a complete round in three browser tabs: six recordings, three submitted tracks, anonymous listening, voting, and all three reveal positions.
