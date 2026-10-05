@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { server } from '../server.js';
-import { revealState } from '../lib/game.js';
+import { revealState, advanceTimers } from '../lib/game.js';
 
 function wav() {
   const rate = 16000, samples = 3200;
@@ -67,4 +67,31 @@ test('reveal stages derive from a stored timestamp', () => {
   assert.equal(revealState(room, startedAt + 1000).visible, false);
   assert.deepEqual([revealState(room, startedAt + 4000).rank, revealState(room, startedAt + 20_000).rank, revealState(room, startedAt + 36_000).rank], [3, 2, 1]);
   assert.equal(revealState(room, startedAt + 48_000).finished, true);
+});
+
+test('timers close the recording and beat-making windows', () => {
+  const now = 2_000_000;
+  const recording = { phase: 'recording', phaseEndsAt: now - 1, players: [], order: [], listeningIndex: 0, reveal: null };
+  assert.equal(advanceTimers(recording, now), true);
+  assert.equal(recording.phase, 'composing');
+  assert.equal(recording.phaseEndsAt, now + 2 * 60 * 1000);
+
+  const composing = {
+    phase: 'composing', phaseEndsAt: now - 1, order: [], listeningIndex: 0, reveal: null,
+    players: [{ id: 'a', track: { pattern: [[1]] } }, { id: 'b', track: null }]
+  };
+  assert.equal(advanceTimers(composing, now), true);
+  assert.equal(composing.phase, 'listening');
+  assert.equal(composing.phaseEndsAt, null);
+  assert.equal(composing.order.length, 1);
+  assert.equal(composing.order[0].makerId, 'a');
+
+  const empty = {
+    phase: 'composing', phaseEndsAt: now - 1, order: [], listeningIndex: 0, reveal: null,
+    players: [{ id: 'a', track: null }, { id: 'b', track: null }]
+  };
+  assert.equal(advanceTimers(empty, now), true);
+  assert.equal(empty.phase, 'listening');
+  assert.equal(empty.order.length, 2);
+  assert.deepEqual(empty.players.map(player => player.track), [{ pattern: [] }, { pattern: [] }]);
 });

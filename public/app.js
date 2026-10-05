@@ -5,9 +5,17 @@ const referenceAudio = import('/reference-sounds.js');
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const qs = new URLSearchParams(location.search);
 let credentials = JSON.parse(sessionStorage.getItem('gb-session') || 'null');
-let state = null, pollTimer = null, polling = false, mode = 'home', busy = false, recording = false, referenceStop = null, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, toastTimer = null;
+let state = null, pollTimer = null, polling = false, mode = 'home', busy = false, recording = false, referenceStop = null, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, phaseTimer = null, toastTimer = null;
 const phases = ['lobby', 'recording', 'composing', 'listening', 'voting', 'reveal'];
 const phaseNames = ['01 / ROOM', '02 / RECORD', '03 / MAKE', '04 / LISTEN', '05 / VOTE', '06 / REVEAL'];
+const formatClock = ms => {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+};
+function timerChip() {
+  if (!state.endsAt) return '';
+  return `<div class="round-timer" id="round-timer"><span>${state.phase === 'recording' ? 'RECORD WINDOW' : 'BEAT WINDOW'}</span><strong>${formatClock(state.endsAt - Date.now())}</strong></div>`;
+}
 
 function toast(message) { toastEl.textContent = message; toastEl.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4200); }
 async function request(url, data) {
@@ -62,7 +70,7 @@ function entry() {
 }
 function shell(title, subtitle) {
   const phase = phases.indexOf(state.phase);
-  return `<div class="room"><div class="room-head"><div><div class="eyebrow">ROUND ${String(state.round || 1).padStart(2, '0')} / ${escapeHtml(state.genre?.name || 'GET READY')}</div><h1>${title}</h1>${subtitle ? `<p class="subtext">${subtitle}</p>` : ''}</div><button class="room-code" data-copy title="Copy invite link"><span><small>ROOM CODE</small>${escapeHtml(state.code)}</span><span>↗</span></button></div><div class="phase-steps">${phaseNames.map((s, i) => `<span class="${i === phase ? 'active' : ''}">${s}</span>`).join('')}</div>`;
+  return `<div class="room"><div class="room-head"><div><div class="eyebrow">ROUND ${String(state.round || 1).padStart(2, '0')} / ${escapeHtml(state.genre?.name || 'GET READY')}</div><h1>${title}</h1>${subtitle ? `<p class="subtext">${subtitle}</p>` : ''}${timerChip()}</div><button class="room-code" data-copy title="Copy invite link"><span><small>ROOM CODE</small>${escapeHtml(state.code)}</span><span>↗</span></button></div><div class="phase-steps">${phaseNames.map((s, i) => `<span class="${i === phase ? 'active' : ''}">${s}</span>`).join('')}</div>`;
 }
 function roster(detail) {
   return `<div class="roster">${state.players.map(p => `<div class="person"><span class="person-name">${escapeHtml(p.name)}${p.id === state.hostId ? '<i>HOST</i>' : ''}${p.id === state.me.id ? '<i>YOU</i>' : ''}</span><span class="status ${detail === 'recorded' ? p.recorded === p.assigned && p.assigned ? 'done' : '' : detail === 'submitted' ? p.submitted ? 'done' : '' : detail === 'voted' ? p.voted ? 'done' : '' : 'done'}">${detail === 'recorded' ? `${p.recorded}/${p.assigned} RECORDED` : detail === 'submitted' ? p.submitted ? 'TRACK READY' : 'MIXING' : detail === 'voted' ? p.voted ? 'VOTED' : 'LISTENING' : 'IN THE ROOM'}</span></div>`).join('')}</div>`;
@@ -72,8 +80,8 @@ function lobby() {
 }
 function recordingView() {
   const ready = state.players.every(p => p.recorded === p.assigned && p.assigned);
-  app.innerHTML = shell('YOUR <span>ASSIGNMENT.</span>', 'Nobody knew their sounds until now. Make them with your own voice.') + `<div class="genre-banner"><div><span>THE GENRE IS</span><br><strong>${escapeHtml(state.genre.name)}</strong></div><span>${state.genre.bpm} BPM / ${state.me.assigned.length} SOUNDS EACH</span></div><div class="two-col"><section><div class="prompt-grid">${state.me.assigned.map((sound, i) => `<article class="prompt"><div class="number">SOUND 0${i + 1} / ${state.me.recorded.includes(sound) ? 'RECORDED ✓' : 'NEEDS YOUR VOICE'}</div><h3>${escapeHtml(sound)}</h3><p>${hint(sound)}</p><button class="button ${state.me.recorded.includes(sound) ? 'ghost' : 'orange'}" data-record="${escapeHtml(sound)}">${state.me.recorded.includes(sound) ? '↻ RE-RECORD' : '● RECORD 2.5 SEC'}</button></article>`).join('')}</div><p class="subtext">Tip: get close to your mic, make one clear hit or short sound, and leave a little silence at the end.</p></section><aside class="card"><div class="label">RECORDING PROGRESS</div>${roster('recorded')}<div class="progressline"><span style="width:${Math.round(state.players.reduce((n,p)=>n+p.recorded,0)/Math.max(1,state.players.length*2)*100)}%"></span></div>${state.me.host ? `<button class="button primary wide" data-action="compose" ${ready ? '' : 'disabled'}>OPEN THE STUDIO →</button>` : `<div class="instruction">${ready ? 'All recordings are in. Waiting for the host to open the studio.' : 'Record both sounds, then wait for the rest of the band.'}</div>`}</aside></div></div>`;
-  app.querySelector('.prompt-grid + .subtext').textContent = 'Hear the synthesized example, then make one clear sound after the countdown. We keep one hit and remove the lead-in air.';
+  app.innerHTML = shell('YOUR <span>ASSIGNMENT.</span>', 'Nobody knew their sounds until now. Make them with your own voice in 30 seconds.') + `<div class="genre-banner"><div><span>THE GENRE IS</span><br><strong>${escapeHtml(state.genre.name)}</strong></div><span>${state.genre.bpm} BPM / ${state.me.assigned.length} SOUNDS EACH</span></div><div class="two-col"><section><div class="prompt-grid">${state.me.assigned.map((sound, i) => `<article class="prompt"><div class="number">SOUND 0${i + 1} / ${state.me.recorded.includes(sound) ? 'RECORDED ✓' : 'NEEDS YOUR VOICE'}</div><h3>${escapeHtml(sound)}</h3><p>${hint(sound)}</p><button class="button ${state.me.recorded.includes(sound) ? 'ghost' : 'orange'}" data-record="${escapeHtml(sound)}">${state.me.recorded.includes(sound) ? '↻ RE-RECORD' : '● RECORD 2.5 SEC'}</button></article>`).join('')}</div><p class="subtext">Tip: get close to your mic, make one clear hit or short sound, and leave a little silence at the end.</p></section><aside class="card"><div class="label">RECORDING PROGRESS</div>${roster('recorded')}<div class="progressline"><span style="width:${Math.round(state.players.reduce((n,p)=>n+p.recorded,0)/Math.max(1,state.players.length*2)*100)}%"></span></div>${state.me.host ? `<button class="button primary wide" data-action="compose" ${ready ? '' : 'disabled'}>OPEN THE STUDIO →</button>` : `<div class="instruction">${ready ? 'All recordings are in. Waiting for the host to open the studio.' : 'Record both sounds before the 30-second window closes.'}</div>`}</aside></div></div>`;
+  app.querySelector('.prompt-grid + .subtext').textContent = 'Hear the synthesized example, then make one clear sound after the countdown. You have 30 seconds before the studio opens.';
   state.me.assigned.forEach(sound => {
     const button = [...app.querySelectorAll('[data-record]')].find(el => el.dataset.record === sound);
     button?.insertAdjacentHTML('beforebegin', `<button class="button small ghost" data-reference="${escapeHtml(sound)}">♫ HEAR EXAMPLE</button>`);
@@ -111,7 +119,7 @@ function sequencer() {
   return `<div class="sequencer-wrap"><div class="sequencer"><div class="seq-header"><span></span>${Array.from({length:16},(_,i)=>`<span class="${i%4===0?'bar':''}">${String(i+1).padStart(2,'0')}</span>`).join('')}</div>${state.kit.map((sample, row) => `<div class="seq-row"><div class="seq-label"><button data-sample="${row}" aria-label="Preview ${escapeHtml(sample.sound)}">▶</button><span class="sample-name" title="${escapeHtml(sample.sound)}">${escapeHtml(sample.sound)}</span></div>${p[row].map((on,col)=>`<button class="step ${on?'on':''}" data-step="${row}:${col}" aria-label="${escapeHtml(sample.sound)}, step ${col+1}" aria-pressed="${!!on}"></button>`).join('')}</div>`).join('')}</div></div>`;
 }
 function composing() {
-  app.innerHTML = shell('THE <span>STUDIO.</span>', 'The whole band’s voices are your instrument. Make a 16-step loop.') + `<div class="studio-top"><div><div class="label">SHARED SAMPLE KIT / ${state.kit.length} SOUNDS</div><p>${state.genre.bpm} BPM · Click a square to add a sound. Every row is someone’s voice.</p></div><div class="studio-actions"><button class="button ghost" data-play-composition>▶ PLAY LOOP</button><button class="button ghost" data-clear>CLEAR</button><button class="button primary" data-submit ${state.me.submitted?'disabled':''}>${state.me.submitted?'TRACK SUBMITTED ✓':'SUBMIT TRACK →'}</button></div></div>${sequencer()}<div class="studio-foot"><span>01—04 / BEATS &nbsp;&nbsp; 05—08 / MORE BEATS &nbsp;&nbsp; 09—12 / KEEP GOING &nbsp;&nbsp; 13—16 / BRING IT HOME</span><span>${state.players.filter(p=>p.submitted).length}/${state.players.length} TRACKS SUBMITTED</span></div>${state.me.submitted ? `<div class="big-center"><div class="symbol">✳</div><h2>TRACK LOCKED IN.</h2><p>Waiting for the rest of the band to finish mixing.</p></div>` : ''}</div>`;
+  app.innerHTML = shell('THE <span>STUDIO.</span>', 'The whole band’s voices are your instrument. Make a 16-step loop in two minutes.') + `<div class="studio-top"><div><div class="label">SHARED SAMPLE KIT / ${state.kit.length} SOUNDS</div><p>${state.genre.bpm} BPM · Click a square to add a sound. Every row is someone’s voice.</p></div><div class="studio-actions"><button class="button ghost" data-play-composition>▶ PLAY LOOP</button><button class="button ghost" data-clear>CLEAR</button><button class="button primary" data-submit ${state.me.submitted?'disabled':''}>${state.me.submitted?'TRACK SUBMITTED ✓':'SUBMIT TRACK →'}</button></div></div>${sequencer()}<div class="studio-foot"><span>01—04 / BEATS &nbsp;&nbsp; 05—08 / MORE BEATS &nbsp;&nbsp; 09—12 / KEEP GOING &nbsp;&nbsp; 13—16 / BRING IT HOME</span><span>${state.players.filter(p=>p.submitted).length}/${state.players.length} TRACKS SUBMITTED</span></div>${state.me.submitted ? `<div class="big-center"><div class="symbol">✳</div><h2>TRACK LOCKED IN.</h2><p>Waiting for the rest of the band to finish mixing before the timer ends.</p></div>` : ''}</div>`;
 }
 function listening() {
   const track = state.tracks[state.listeningIndex];
@@ -127,10 +135,19 @@ function revealView() {
   clearInterval(countdownTimer);
   if (!r.visible && r.endsAt) countdownTimer = setInterval(() => { const el = document.querySelector('#countdown'); if (el) el.textContent = Math.max(1, Math.ceil((r.endsAt-Date.now())/1000)); }, 200);
 }
+function startPhaseTimer() {
+  clearInterval(phaseTimer);
+  if (!state?.endsAt) return;
+  const update = () => { const el = document.querySelector('#round-timer strong'); if (el) el.textContent = formatClock(state.endsAt - Date.now()); };
+  update();
+  phaseTimer = setInterval(update, 200);
+}
 function render() {
   if (!state) { mode === 'home' ? home() : entry(); return; }
   clearInterval(countdownTimer);
+  clearInterval(phaseTimer);
   ({ lobby, recording: recordingView, composing, listening, voting, reveal: revealView })[state.phase]();
+  startPhaseTimer();
 }
 function stopPlayback() {
   if (!playback) return;

@@ -11,8 +11,8 @@
 You need **3–8 players**, each with a browser and microphone. The host creates a room and shares its six-character code or invite link. Headphones help keep playback out of recordings.
 
 1. **Draw a genre.** The host starts the round and everyone receives two surprise sound prompts suited to the genre.
-2. **Record your sounds.** Each prompt has a playable example and a mouth cue. Make one clear sound with your voice, then preview or replace your take. The browser trims lead-in air and extra attempts, balances the level, and uploads one short sample.
-3. **Build a beat.** The recordings become one shared kit. Everyone makes a track using only that kit and a 16-step sequencer.
+2. **Record your sounds.** Each prompt has a playable example and a mouth cue. Make one clear sound with your voice, then preview or replace your take. The recording window closes after 30 seconds, and the browser trims lead-in air and extra attempts, balances the level, and uploads one short sample.
+3. **Build a beat.** The recordings become one shared kit. Everyone makes a track using only that kit and a 16-step sequencer before the two-minute beat window closes.
 4. **Listen anonymously.** Tracks play one at a time, without their makers' names. The room moves on after everyone has listened.
 5. **Vote.** Pick your favorite track. You cannot vote for your own.
 6. **Watch the reveal.** Third, second, and first place appear in order, each with its maker and track. The host can start another round.
