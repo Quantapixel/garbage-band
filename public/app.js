@@ -1,10 +1,11 @@
 const app = document.querySelector('#app');
 const toastEl = document.querySelector('#toast');
 const audioProcessor = import('/audio-process.js');
+const referenceAudio = import('/reference-sounds.js');
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const qs = new URLSearchParams(location.search);
 let credentials = JSON.parse(sessionStorage.getItem('gb-session') || 'null');
-let state = null, events = null, mode = 'home', busy = false, recording = false, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, toastTimer = null;
+let state = null, events = null, mode = 'home', busy = false, recording = false, referenceStop = null, audioContext = null, audioCache = new Map(), rawAudioCache = new Map(), playback = null, pattern = null, countdownTimer = null, toastTimer = null;
 const phases = ['lobby', 'recording', 'composing', 'listening', 'voting', 'reveal'];
 const phaseNames = ['01 / ROOM', '02 / RECORD', '03 / MAKE', '04 / LISTEN', '05 / VOTE', '06 / REVEAL'];
 
@@ -65,16 +66,30 @@ function lobby() {
 function recordingView() {
   const ready = state.players.every(p => p.recorded === p.assigned && p.assigned);
   app.innerHTML = shell('YOUR <span>ASSIGNMENT.</span>', 'Nobody knew their sounds until now. Make them with your own voice.') + `<div class="genre-banner"><div><span>THE GENRE IS</span><br><strong>${escapeHtml(state.genre.name)}</strong></div><span>${state.genre.bpm} BPM / ${state.me.assigned.length} SOUNDS EACH</span></div><div class="two-col"><section><div class="prompt-grid">${state.me.assigned.map((sound, i) => `<article class="prompt"><div class="number">SOUND 0${i + 1} / ${state.me.recorded.includes(sound) ? 'RECORDED ✓' : 'NEEDS YOUR VOICE'}</div><h3>${escapeHtml(sound)}</h3><p>${hint(sound)}</p><button class="button ${state.me.recorded.includes(sound) ? 'ghost' : 'orange'}" data-record="${escapeHtml(sound)}">${state.me.recorded.includes(sound) ? '↻ RE-RECORD' : '● RECORD 2.5 SEC'}</button></article>`).join('')}</div><p class="subtext">Tip: get close to your mic, make one clear hit or short sound, and leave a little silence at the end.</p></section><aside class="card"><div class="label">RECORDING PROGRESS</div>${roster('recorded')}<div class="progressline"><span style="width:${Math.round(state.players.reduce((n,p)=>n+p.recorded,0)/Math.max(1,state.players.length*2)*100)}%"></span></div>${state.me.host ? `<button class="button primary wide" data-action="compose" ${ready ? '' : 'disabled'}>OPEN THE STUDIO →</button>` : `<div class="instruction">${ready ? 'All recordings are in. Waiting for the host to open the studio.' : 'Record both sounds, then wait for the rest of the band.'}</div>`}</aside></div></div>`;
+  app.querySelector('.prompt-grid + .subtext').textContent = 'Hear the synthesized example, then make one clear sound after the countdown. We keep one hit and remove the lead-in air.';
+  state.me.assigned.forEach(sound => {
+    const button = [...app.querySelectorAll('[data-record]')].find(el => el.dataset.record === sound);
+    button?.insertAdjacentHTML('beforebegin', `<button class="button small ghost" data-reference="${escapeHtml(sound)}">♫ HEAR EXAMPLE</button>`);
+  });
   state.me.recorded.forEach(sound => {
     const button = [...app.querySelectorAll('[data-record]')].find(el => el.dataset.record === sound);
     button?.insertAdjacentHTML('afterend', `<button class="button small ghost" data-preview-own="${escapeHtml(sound)}">▶ PREVIEW</button>`);
   });
 }
 function hint(sound) {
-  if (/kick|808|bass|rumble/i.test(sound)) return 'Go low and punchy. A deep “boom” or “dum” works great.';
-  if (/hat|shaker|tambourine/i.test(sound)) return 'Think crisp “ts”, “ch”, or “sh”. Keep it short.';
-  if (/snare|clap|cowbell|impact/i.test(sound)) return 'One sharp smack, pop, or metallic mouth sound.';
-  return 'Use your mouth, your voice, and a little imagination.';
+  if (/cowbell/i.test(sound)) return 'MOUTH CUE: one bright “ka-ding!” or metallic clink. Make it once.';
+  if (/kick|808/i.test(sound)) return 'MOUTH CUE: one deep, punchy “boom!”';
+  if (/bass|rumble/i.test(sound)) return 'MOUTH CUE: one low “bwum” or humming pulse.';
+  if (/snare|breakbeat/i.test(sound)) return 'MOUTH CUE: one sharp “psh!” or “ka!”';
+  if (/clap/i.test(sound)) return 'MOUTH CUE: one crisp “pa!”';
+  if (/hat/i.test(sound)) return 'MOUTH CUE: one tiny “ts!” or “ch!”';
+  if (/shaker|tambourine/i.test(sound)) return 'MOUTH CUE: one quick “shik!”';
+  if (/vocal|hook|shout|voice/i.test(sound)) return 'MOUTH CUE: one short syllable like “hey!”';
+  if (/scratch/i.test(sound)) return 'MOUTH CUE: one quick “wika!”';
+  if (/riser|sweep/i.test(sound)) return 'MOUTH CUE: one rising “shoo!”';
+  if (/guitar|string/i.test(sound)) return 'MOUTH CUE: one plucked “dwang!”';
+  if (/impact/i.test(sound)) return 'MOUTH CUE: one dramatic “bwong!”';
+  return 'MOUTH CUE: one short, pitched “bip!”';
 }
 function getPattern() {
   if (!pattern || pattern.length !== state.kit.length) {
@@ -123,12 +138,26 @@ async function context() {
   if (audioContext.state === 'suspended') await audioContext.resume();
   return audioContext;
 }
+function prefetchSample(sample) {
+  if (!rawAudioCache.has(sample.id)) {
+    const pending = fetch(sample.url).then(response => {
+      if (!response.ok) throw new Error('Could not load a recording.');
+      return response.arrayBuffer();
+    });
+    rawAudioCache.set(sample.id, pending);
+    pending.catch(() => rawAudioCache.delete(sample.id));
+  }
+  return rawAudioCache.get(sample.id);
+}
 async function sampleBuffer(sample) {
   if (!audioCache.has(sample.id)) {
-    const ctx = await context();
-    const response = await fetch(sample.url);
-    if (!response.ok) throw new Error('Could not load a recording.');
-    audioCache.set(sample.id, await ctx.decodeAudioData(await response.arrayBuffer()));
+    const pending = (async () => {
+      const ctx = await context();
+      const data = await prefetchSample(sample);
+      return ctx.decodeAudioData(data.slice(0));
+    })();
+    audioCache.set(sample.id, pending);
+    pending.catch(() => audioCache.delete(sample.id));
   }
   return audioCache.get(sample.id);
 }
@@ -167,6 +196,7 @@ async function playTrack(track, loops = 4, markHeard = false) {
 async function recordSound(sound) {
   if (recording) return;
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('This browser cannot record audio. Try a current Chrome, Firefox, or Safari.');
+  referenceStop?.(); referenceStop = null;
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
@@ -174,17 +204,30 @@ async function recordSound(sound) {
     const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
     const chunks = []; recording = true;
     const button = [...document.querySelectorAll('[data-record]')].find(b => b.dataset.record === sound);
-    if (button) { button.innerHTML = '<span class="rec-indicator">RECORDING... </span>'; button.disabled = true; }
+    if (button) button.disabled = true;
+    for (let count = 2; count > 0; count--) {
+      if (button) button.textContent = `GET READY ${count}...`;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (state?.phase !== 'recording') throw new Error('Recording phase has ended.');
+    if (button) button.innerHTML = '<span class="rec-indicator">RECORDING... </span>';
     recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     recorder.onerror = () => toast('Recording failed. Try again.');
     recorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop()); recording = false;
+      stream.getTracks().forEach(t => t.stop());
       try {
         const blob = new Blob(chunks, { type: recorder.mimeType || mime || 'audio/webm' });
-        const audio = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(blob); });
-        const next = await request('/api/record', { ...credentials, sound, mime: blob.type, audio });
-        applyState(next); toast(`${sound} added to the kit.`);
+        const decoder = audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+        const decoded = await decoder.decodeAudioData(await blob.arrayBuffer());
+        const { optimizePcm, encodeWav } = await audioProcessor;
+        const channels = Array.from({ length: decoded.numberOfChannels }, (_, i) => decoded.getChannelData(i));
+        const optimized = optimizePcm(channels, decoded.sampleRate, { sound });
+        const wav = new Blob([encodeWav(optimized.pcm, optimized.sampleRate)], { type: 'audio/wav' });
+        const audio = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = reject; reader.readAsDataURL(wav); });
+        const next = await request('/api/record', { ...credentials, sound, mime: 'audio/wav', audio });
+        applyState(next); toast(`One ${sound} hit kept. Preview it or re-record.`);
       } catch (err) { toast(err.message); render(); }
+      finally { recording = false; }
     };
     recorder.start(); setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, 2500);
   } catch (err) { stream?.getTracks().forEach(t=>t.stop()); recording=false; toast(err.name === 'NotAllowedError' ? 'Allow microphone access to record your sounds.' : err.message); render(); }
@@ -196,6 +239,7 @@ document.addEventListener('click', async e => {
   if (target.hasAttribute('data-copy')) { try { await navigator.clipboard.writeText(`${location.origin}/?room=${state.code}`); toast('Invite link copied.'); } catch { toast(`Room code: ${state.code}`); } return; }
   if (target.dataset.action) return action(target.dataset.action);
   if (target.dataset.record) return recordSound(target.dataset.record);
+  if (target.dataset.reference) { try { referenceStop?.(); const ctx = await context(); const { playReference } = await referenceAudio; referenceStop = playReference(ctx, target.dataset.reference); } catch(err) { toast(err.message); } return; }
   if (target.dataset.previewOwn) { try { const ctx = await context(); const response = await fetch(state.me.ownClips[target.dataset.previewOwn]); if (!response.ok) throw new Error('Preview unavailable.'); const buffer = await ctx.decodeAudioData(await response.arrayBuffer()); const source = ctx.createBufferSource(); source.buffer=buffer; source.connect(ctx.destination); source.start(); } catch(err) {toast(err.message);} return; }
   if (target.dataset.step) {
     if (state.me.submitted) return;

@@ -208,7 +208,7 @@ async function handler(req, res) {
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return error(res, 404, 'Not found.');
     const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-    if (!['index.html', 'app.js', 'audio-process.js', 'style.css'].includes(file)) return error(res, 404, 'Not found.');
+    if (!['index.html', 'app.js', 'audio-process.js', 'reference-sounds.js', 'style.css'].includes(file)) return error(res, 404, 'Not found.');
     const filePath = path.join(root, file); const info = await stat(filePath); const data = await readFile(filePath);
     res.writeHead(200, { 'content-type': { 'html': 'text/html; charset=utf-8', 'js': 'text/javascript; charset=utf-8', 'css': 'text/css; charset=utf-8' }[file.split('.').pop()], 'content-length': info.size }); res.end(req.method === 'HEAD' ? undefined : data);
   } catch (e) { error(res, e.message?.includes('large') ? 413 : 400, e.message || 'Request failed.'); }
